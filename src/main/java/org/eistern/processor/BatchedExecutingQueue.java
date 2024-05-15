@@ -1,5 +1,8 @@
 package org.eistern.processor;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -7,6 +10,8 @@ import java.util.concurrent.*;
 import java.util.function.Function;
 
 public class BatchedExecutingQueue<T, R> implements AutoCloseable {
+    private static final Logger log = LoggerFactory.getLogger(BatchedExecutingQueue.class);
+
     private final BlockingQueue<InputPair> inputElements;
     private final Function<List<T>, List<R>> batchedAction;
 
@@ -18,9 +23,7 @@ public class BatchedExecutingQueue<T, R> implements AutoCloseable {
     public BatchedExecutingQueue(int batchSize, Duration batchTimeout, Function<List<T>, List<R>> batchedAction) {
         this.inputElements = new ArrayBlockingQueue<>(batchSize * 2);
         this.batchedAction = batchedAction;
-
-        this.batchTaskExecutor = new ScheduledThreadPoolExecutor(1);
-
+        this.batchTaskExecutor = Executors.newSingleThreadScheduledExecutor();
         this.batchSize = batchSize;
         this.batchTimeout = batchTimeout;
     }
@@ -30,6 +33,7 @@ public class BatchedExecutingQueue<T, R> implements AutoCloseable {
         inputElements.add(new InputPair(value, resultingFuture));
 
         if (inputElements.size() >= batchSize) {
+            log.debug("Full batch of size {} gathered. Add new processing task into the executor", batchSize);
             batchTaskExecutor.execute(new BatchProcessingTask());
         }
 
@@ -37,13 +41,11 @@ public class BatchedExecutingQueue<T, R> implements AutoCloseable {
     }
 
     public void start() {
-        // init batch executor
         batchTaskExecutor.scheduleAtFixedRate(new BatchProcessingTask(), 0, batchTimeout.getSeconds(), TimeUnit.SECONDS);
     }
 
     @Override
     public void close() {
-        // close batch executor
         batchTaskExecutor.shutdown();
     }
 
@@ -52,20 +54,22 @@ public class BatchedExecutingQueue<T, R> implements AutoCloseable {
         @Override
         public void run() {
             List<InputPair> processedBatch = new ArrayList<>();
-            int processedElements = inputElements.drainTo(processedBatch, batchSize);
 
-            System.out.printf("Batch processing of %d elements%n", processedElements);
+            int processedElements = inputElements.drainTo(processedBatch, batchSize);
+            log.debug("Start batch processing of {} elements", processedElements);
 
             List<T> processedValues = processedBatch.stream().map(p -> p.value).toList();
             List<R> results;
             try {
                 results = batchedAction.apply(processedValues);
             } catch (Exception e) {
+                log.error("Processing failed with exception. Failing {} futures", processedElements, e);
                 for (int i = 0; i < processedElements; i++) {
                     processedBatch.get(i).future.completeExceptionally(e);
                 }
                 return;
             }
+            log.debug("Processing successful. Complete {} futures", processedElements);
             for (int i = 0; i < processedElements; i++) {
                 processedBatch.get(i).future.complete(results.get(i));
             }

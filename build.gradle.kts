@@ -16,7 +16,7 @@ dependencies {
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.assertj:assertj-core:3.25.1")
-    testImplementation("org.apache.logging.log4j:log4j-slf4j2-impl:2.23.1")
+    testImplementation("ch.qos.logback:logback-classic:1.5.6")
 }
 
 tasks.test {
