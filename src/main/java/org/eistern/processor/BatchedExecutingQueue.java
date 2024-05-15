@@ -27,9 +27,9 @@ public class BatchedExecutingQueue<T, R> implements AutoCloseable {
 
     public CompletableFuture<R> offer(T value) {
         CompletableFuture<R> resultingFuture = new CompletableFuture<>();
-        inputElements.offer(new InputPair(value, resultingFuture));
+        inputElements.add(new InputPair(value, resultingFuture));
 
-        if (inputElements.size() > batchSize) {
+        if (inputElements.size() >= batchSize) {
             batchTaskExecutor.execute(new BatchProcessingTask());
         }
 
@@ -42,8 +42,9 @@ public class BatchedExecutingQueue<T, R> implements AutoCloseable {
     }
 
     @Override
-    public void close() throws Exception {
+    public void close() {
         // close batch executor
+        batchTaskExecutor.shutdown();
     }
 
     private class BatchProcessingTask implements Runnable {
@@ -56,8 +57,15 @@ public class BatchedExecutingQueue<T, R> implements AutoCloseable {
             System.out.printf("Batch processing of %d elements%n", processedElements);
 
             List<T> processedValues = processedBatch.stream().map(p -> p.value).toList();
-            List<R> results = batchedAction.apply(processedValues);
-
+            List<R> results;
+            try {
+                results = batchedAction.apply(processedValues);
+            } catch (Exception e) {
+                for (int i = 0; i < processedElements; i++) {
+                    processedBatch.get(i).future.completeExceptionally(e);
+                }
+                return;
+            }
             for (int i = 0; i < processedElements; i++) {
                 processedBatch.get(i).future.complete(results.get(i));
             }
